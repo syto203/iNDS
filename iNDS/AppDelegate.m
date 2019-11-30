@@ -12,6 +12,10 @@
 #import "SSZipArchive.h"
 #import "LZMAExtractor.h"
 #import "ZAActivityBar.h"
+#import <SDImageCacheConfig.h>
+#import <SDImageCache.h>
+
+#import "iNDSDBManager.h"
 
 #include <libkern/OSAtomic.h>
 #include <execinfo.h>
@@ -38,11 +42,13 @@
 
 @end
 
+NSString * const iNDSUserRequestedToPlayROMNotification = @"iNDSUserRequestedToPlayROMNotification";
+
 @implementation AppDelegate
 
 + (AppDelegate*)sharedInstance
 {
-    return [[UIApplication sharedApplication] delegate];
+    return (AppDelegate *) [[UIApplication sharedApplication] delegate];
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
@@ -62,9 +68,15 @@
     [[UIBarButtonItem appearance] setBackButtonTitlePositionAdjustment:UIOffsetMake(-200, 0)
                                                          forBarMetrics:UIBarMetricsDefault];
     
+    [self setupSDWebImageCache];
+    
     [self authDropbox];
     
     return YES;
+}
+
+- (void)setupSDWebImageCache {
+    [SDImageCache sharedImageCache].config.maxCacheAge = 60 * 60 * 24 * 7;
 }
 
 - (void)authDropbox {
@@ -104,13 +116,15 @@
             }
             
             if (!invalidAppKeyOrSecret && !shouldRetry && [unsuccessfullyMigratedTokenData count] == 0) {
-                [DBClientsManager setupWithAppKey:[self appKey]];
+                DBTransportDefaultConfig *transportConfiguration = [[DBTransportDefaultConfig alloc] initWithAppKey:[self appKey] forceForegroundSession:YES];
+                [DBClientsManager setupWithTransportConfig:transportConfiguration];
                 [CHBgDropboxSync start];
             }
         } queue:nil appKey:[self appKey] appSecret:[self appSecret]];
         
         if (!willPerformMigration) {
-            [DBClientsManager setupWithAppKey:[self appKey]];
+            DBTransportDefaultConfig *transportConfiguration = [[DBTransportDefaultConfig alloc] initWithAppKey:[self appKey] forceForegroundSession:YES];
+            [DBClientsManager setupWithTransportConfig:transportConfiguration];
             [CHBgDropboxSync start];
         }
     }
@@ -122,6 +136,7 @@
         return;
     }
     backgroundProcessesStarted = YES;
+    /*
     dispatch_async(dispatch_get_main_queue(), ^{
         //Show Twitter alert
         if (![[NSUserDefaults standardUserDefaults] objectForKey:@"TwitterAlert"]) {
@@ -140,12 +155,13 @@
             [alert showCustom:[self topMostController] image:twitterImage color:[UIColor colorWithRed:85/255.0 green:175/255.0 blue:238/255.0 alpha:1] title:@"Love iNDS?" subTitle:@"Show some love and get updates about the newest emulators by following the developer on Twitter!" closeButtonTitle:@"No, Thanks" duration:0.0];
         }
     });
+     */
 }
 
 
 - (BOOL)application:(UIApplication *)application openURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication annotation:(id)annotation {
     NSLog(@"Opening: %@", url);
-    if ([[[NSString stringWithFormat:@"%@", url] substringToIndex:2] isEqualToString: @"db"]) {
+    if ([[url scheme] hasPrefix:@"db"]) {
         NSLog(@"DB");
         //        if ([[DBSession sharedSession] handleOpenURL:url]) {
         //            if ([[DBSession sharedSession] isLinked]) {
@@ -167,6 +183,20 @@
         //            }
         return YES;
         //        }
+    } else if ([[[url scheme] lowercaseString] isEqualToString:@"inds"]) {
+        NSString *name = [[url host] stringByRemovingPercentEncoding];
+        
+        iNDSGame *rom = [iNDSGame gameWithName:name];
+        
+        if (rom) {
+            NSLog(@"Found ROM");
+            [[NSNotificationCenter defaultCenter] postNotificationName:iNDSUserRequestedToPlayROMNotification object:rom userInfo:nil];
+            return YES;
+        } else {
+            NSLog(@"Could not find ROM");
+        }
+        
+        return NO;
     } else if (url.isFileURL && [[NSFileManager defaultManager] fileExistsAtPath:url.path]) {
         NSLog(@"Zip File (maybe)");
         NSFileManager *fm = [NSFileManager defaultManager];
@@ -427,6 +457,53 @@
     // Called when the application is about to terminate. Save data if appropriate. See also applicationDidEnterBackground:.
 }
 
+- (void)downloadDB:(void(^)(int))handler {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *stringURL = @"https://inds.nerd.net/editor/openvgdb.sqlite";
+        NSURL  *url = [NSURL URLWithString:stringURL];
+        NSData *urlData = [NSData dataWithContentsOfURL:url];
+        if ( urlData )
+        {
+            NSString *dbPath = [[NSBundle mainBundle] pathForResource:@"openvgdb" ofType:@"sqlite"];
+            
+            [urlData writeToFile:dbPath atomically:YES];
+            handler(0);
+        }
+        handler(1);
+    });
+}
+
+- (void)checkForUpdate:(void(^)(int, NSString*))handler {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *stringURL = @"https://api.github.com/repos/iNDS-Team/iNDS/releases/latest";
+        NSURL  *url = [NSURL URLWithString:stringURL];
+        NSData *urlData = [NSData dataWithContentsOfURL:url];
+        if ( urlData )
+        {
+            NSError *error = nil;
+            id object = [NSJSONSerialization
+                         JSONObjectWithData:urlData
+                         options:0
+                         error:&error];
+            
+            if(error) { /* JSON was malformed, act appropriately here */ }
+            
+            // the originating poster wants to deal with dictionaries;
+            // assuming you do too then something like this is the first
+            // validation step:
+            if([object isKindOfClass:[NSDictionary class]])
+            {
+                NSDictionary *results = object;
+                handler(0, results[@"tab_name"]);
+                return;
+            }
+            handler(0, nil);
+            return;
+        }
+        handler(1, nil);
+    });
+}
+
 - (WCEasySettingsViewController *)getSettingsViewController
 {
     
@@ -442,8 +519,14 @@
                                                                                       @"Joystick"]],
                                   [[WCEasySettingsSlider alloc] initWithIdentifier:@"controlOpacity"
                                                                              title:@"Controller Opacity"],
-                                  [[WCEasySettingsSwitch alloc] initWithIdentifier:@"vibrate"
-                                                                             title:@"Vibration"],
+                                  [[WCEasySettingsSegment alloc] initWithIdentifier:@"vibrationStr"
+                                                                              title:@"Vibration Strength"
+                                                                              items:@[
+                                                                                      @"Off",
+                                                                                      @"Light",
+                                                                                      @"Heavy"]],
+                                  [[WCEasySettingsSwitch alloc] initWithIdentifier:@"hapticForVibration"
+                                                                             title:@"Haptic for Vibration"],
                                   [[WCEasySettingsSwitch alloc] initWithIdentifier:@"volumeBumper"
                                                                              title:@"Volume Button Bumpers"],
                                   [[WCEasySettingsSwitch alloc] initWithIdentifier:@"disableTouchScreen"
@@ -486,8 +569,8 @@
         WCEasySettingsSection *audioSection = [[WCEasySettingsSection alloc] initWithTitle:@"Audio" subTitle:@""];
         audioSection.items = @[[[WCEasySettingsSwitch alloc] initWithIdentifier:@"disableSound"
                                                                           title:@"Disable Sound"],
-                               [[WCEasySettingsSwitch alloc] initWithIdentifier:@"ignoreMute"
-                                                                          title:@"Ignore Mute Button"],
+                               [[WCEasySettingsSwitch alloc] initWithIdentifier:@"allowExternalAudio"
+                                                                          title:@"Allow External Audio"],
                                [[WCEasySettingsSwitch alloc] initWithIdentifier:@"synchSound"
                                                                           title:@"Synchronous Audio"],
                                [[WCEasySettingsSwitch alloc] initWithIdentifier:@"enableMic"
@@ -532,7 +615,13 @@
                                                                    subtitle:@"JIT is not yet available for your device."];
         }
         
+        WCEasySettingsSwitch *adv_timing = [[WCEasySettingsSwitch alloc] initWithIdentifier:@"adv_timing" title:@"Enable Advanced Bus Timing"];
+        
+        WCEasySettingsSlider2 *depth = [[WCEasySettingsSlider2 alloc] initWithIdentifier:@"depth" title:@"Depth Comparison Threshold" max:500];
+        
         coreSection.items = @[engineOption,
+                              adv_timing,
+                              depth,
                               [[WCEasySettingsSegment alloc] initWithIdentifier:@"frameSkip"
                                                                           title:@"Frame Skip"
                                                                           items:@[@"None",
@@ -554,38 +643,147 @@
                                                                               title:@"Full Screen Settings"],
                                    [[WCEasySettingsSwitch alloc] initWithIdentifier:@"showFPS"
                                                                               title:@"Show FPS"]];
+        WCEasySettingsSection *iconSection = [[WCEasySettingsSection alloc] initWithTitle:@"ICONS" subTitle:@"Download the Latest Icon Pack"];
+        WCEasySettingsButton *iconButton = [[WCEasySettingsButton alloc] initWithTitle:@"Update Icons" subtitle:nil callback:^(bool finished) {
+            [[iNDSDBManager sharedInstance] closeDB];
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:@"Please wait..." preferredStyle:UIAlertControllerStyleAlert];
+            UIActivityIndicatorView *loadingIndicator = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(10, 5, 50, 50)];
+            loadingIndicator.hidesWhenStopped = true;
+            loadingIndicator.activityIndicatorViewStyle = UIActivityIndicatorViewStyleGray;
+            [loadingIndicator startAnimating];
+            [alert.view addSubview:loadingIndicator];
+            
+                [self->_settingsViewController presentViewController:alert animated:YES completion:nil];
+                
+                [self downloadDB:^(int result) {
+                    [[NSOperationQueue mainQueue] addOperationWithBlock:^ {
+                    [self->_settingsViewController dismissViewControllerAnimated:true completion:^{
+                        if (result == 0) {
+                            UIAlertController *success = [UIAlertController alertControllerWithTitle:@"Success" message:@"Icons updated successfully." preferredStyle:UIAlertControllerStyleAlert];
+                            UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
+                                                                                  handler:^(UIAlertAction * action) {}];
+                            [success addAction:defaultAction];
+                            [self->_settingsViewController presentViewController:success animated:YES completion:nil];
+                        } else {
+                            UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"Failure" message:@"Icon update failed." preferredStyle:UIAlertControllerStyleAlert];
+                            UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
+                                                                                  handler:^(UIAlertAction * action) {}];
+                            [fail addAction:defaultAction];
+                            [self->_settingsViewController presentViewController:fail animated:YES completion:nil];
+                        }
+                        [[iNDSDBManager sharedInstance] openDB];
+                    }];
+                }];
+            }];
+        }];
+        
+        WCEasySettingsSection *resetSection = [[WCEasySettingsSection alloc] initWithTitle:@"RESET" subTitle:@"Erase All Content"];
+        WCEasySettingsButton *resetButton = [[WCEasySettingsButton alloc] initWithTitle:@"Reset" subtitle:nil callback:^(bool finished) {
+            
+            // prompt the user before deleting all data
+            UIAlertController *warningAlert = [UIAlertController alertControllerWithTitle:@"Warning" message:@"This will erase all content. Do you want to continue?" preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction * action) {}];
+            UIAlertAction *continueAction = [UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
+                
+                NSArray *everything = @[[self batteryDir],
+                                        [self documentsPath]];
+                NSFileManager *fileMgr = [NSFileManager defaultManager];
+                for (NSString *path in everything) {
+                    NSArray *files = [fileMgr contentsOfDirectoryAtPath:path error:nil];
+                    for (NSString *file in files) {
+                        NSLog(@"Removing %@", [path stringByAppendingPathComponent:file]);
+                        [fileMgr removeItemAtPath:[path stringByAppendingPathComponent:file] error:nil];
+                    }
+                }
+                
+                UIAlertController *doneAlert = [UIAlertController alertControllerWithTitle:@"Success" message:@"Content successfully reset!" preferredStyle:UIAlertControllerStyleAlert];
+                UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
+                                                                      handler:^(UIAlertAction * action) {}];
+                
+                [doneAlert addAction:defaultAction];
+                
+                [self->_settingsViewController presentViewController:doneAlert animated:YES completion:nil];
+            }];
+            
+            [warningAlert addAction:cancelAction];
+            [warningAlert addAction:continueAction];
+            [self->_settingsViewController presentViewController:warningAlert animated:YES completion:nil];
+            
+        }];
+        resetSection.items = @[
+                               resetButton
+                               ];
+        iconSection.items = @[ iconButton ];
         
         
         // Credits
         NSString *myVersion = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleShortVersionString"];
         NSString *noRar = @"";
+        WCEasySettingsButton *updateButton = [[WCEasySettingsButton alloc] initWithTitle:@"Check for Updates" subtitle:nil callback:^(bool finished) {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:@"Please wait..." preferredStyle:UIAlertControllerStyleAlert];
+            UIActivityIndicatorView *loadingIndicator = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(10, 5, 50, 50)];
+            loadingIndicator.hidesWhenStopped = true;
+            loadingIndicator.activityIndicatorViewStyle = UIActivityIndicatorViewStyleGray;
+            [loadingIndicator startAnimating];
+            [alert.view addSubview:loadingIndicator];
+            
+            [self->_settingsViewController presentViewController:alert animated:YES completion:nil];
+            
+            [self checkForUpdate:^(int result, NSString *version) {
+                [[NSOperationQueue mainQueue] addOperationWithBlock:^ {
+                    [self->_settingsViewController dismissViewControllerAnimated:true completion:^{
+                        if (result == 0 || version == nil) {
+                            if ([[version substringFromIndex:1] compare:myVersion options:NSNumericSearch] == NSOrderedDescending) {
+                                // update needed
+                                UIAlertController *update = [UIAlertController alertControllerWithTitle:@"Update Available" message:@"An update is available on the iNDS Github" preferredStyle:UIAlertControllerStyleAlert];
+                                UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
+                                                                                      handler:^(UIAlertAction * action) {}];
+                                [update addAction:defaultAction];
+                                [self->_settingsViewController presentViewController:update animated:YES completion:nil];
+                            } else {
+                                UIAlertController *no_update = [UIAlertController alertControllerWithTitle:@"Up To Date" message:@"Your iNDS is already up to date." preferredStyle:UIAlertControllerStyleAlert];
+                                UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
+                                                                                      handler:^(UIAlertAction * action) {}];
+                                [no_update addAction:defaultAction];
+                                [self->_settingsViewController presentViewController:no_update animated:YES completion:nil];
+                            }
+                            
+                        } else {
+                            UIAlertController *fail = [UIAlertController alertControllerWithTitle:@"Failure" message:@"Checking for update failed." preferredStyle:UIAlertControllerStyleAlert];
+                            UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault
+                                                                                  handler:^(UIAlertAction * action) {}];
+                            [fail addAction:defaultAction];
+                            [self->_settingsViewController presentViewController:fail animated:YES completion:nil];
+                        }
+                    }];
+                }];
+            }];
+        }];
         WCEasySettingsSection *creditsSection = [[WCEasySettingsSection alloc]
                                                  initWithTitle:@"Info"
                                                  subTitle:[NSString stringWithFormat:@"Version %@ %@", myVersion, noRar]];
         
-        creditsSection.items = @[[[WCEasySettingsUrl alloc] initWithTitle:@"Will Cobb"
+        creditsSection.items = @[[[WCEasySettingsUrl alloc] initWithTitle:@"iNDS Team"
                                                                  subtitle:@"Developer"
-                                                                      url:@"https://twitter.com/miniroo321"],
-                                 [[WCEasySettingsUrl alloc] initWithTitle:@"Twitter"
-                                                                 subtitle:@"@iNDSapp"
-                                                                      url:@"https://twitter.com/iNDSapp"],
+                                                                      url:@"https://github.com/iNDS-Team"],
                                  [[WCEasySettingsUrl alloc] initWithTitle:@"NDS4iOS Team"
                                                                  subtitle:@"Ported DeSmuME to iOS"
                                                                       url:nil],
                                  [[WCEasySettingsUrl alloc] initWithTitle:@"DeSmuME"
-                                                                 subtitle:@"Emulatiion Core"
+                                                                 subtitle:@"Emulation Core"
                                                                       url:@"http://www.desmume.org/"],
                                  [[WCEasySettingsUrl alloc] initWithTitle:@"Wiki Creator"
                                                                  subtitle:@"Pmp174"
                                                                       url:@"https://twitter.com/Pmp174"],
                                  [[WCEasySettingsUrl alloc] initWithTitle:@"Source"
                                                                  subtitle:@"Github"
-                                                                      url:@"https://github.com/WilliamLCobb/iNDS"]];
+                                                                      url:@"https://github.com/iNDS-Team/iNDS"],
+                                 updateButton];
         
         
         
         
-        _settingsViewController.sections = @[controlsSection, dropboxSection, /*buildStoreSection,*/ graphicsSection, coreSection, emulatorSection, audioSection, interfaceSection, creditsSection];
+        _settingsViewController.sections = @[controlsSection, dropboxSection, /*buildStoreSection,*/ graphicsSection, coreSection, emulatorSection, audioSection, interfaceSection, resetSection, iconSection, creditsSection];
     }
     
     return _settingsViewController;

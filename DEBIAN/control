@@ -1,0 +1,9 @@
+Package: net.nerd.iNDS
+Name: iNDS
+Version: ${INDS_VER}
+Architecture: iphoneos-arm
+Description: Revival of the Nintendo DS emulator for iOS by iNDS Team
+Homepage: https://inds.nerd.net
+Maintainer: iNDS Team <inds@nerd.net>
+Author: iNDS Team <inds@nerd.net>
+Section: Games

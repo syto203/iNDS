@@ -14,7 +14,6 @@
 #include "debug.h"
 #include "NDSSystem.h"
 #include "path.h"
-#include "addons.h"
 #include "slot1.h"
 #include "saves.h"
 #include "video.h"
@@ -24,7 +23,7 @@
 #include "slot1.h"
 #include "version.h"
 #include "metaspu.h"
-
+#include "GPU.h"
 
 #define LOGI(...) printf(__VA_ARGS__);printf("\n")
 
@@ -114,7 +113,7 @@ void EMU_init(int lang)
 			slot1_device_type = NDS_SLOT1_RETAIL;
 			break;
 	}
-	*/
+	
 	switch (addon_type)
 	{
         case NDS_ADDON_NONE:
@@ -146,7 +145,7 @@ void EMU_init(int lang)
     
 	//!slot1Change((NDS_SLOT1_TYPE)slot1_device_type);
 	addonsChangePak(addon_type);
-    
+    */
 	NDS_Init();
 	
 	//osd->singleScreen = true;
@@ -184,9 +183,8 @@ void EMU_init(int lang)
 
 void EMU_loadSettings()
 {
-    CommonSettings.num_cores = sysconf( _SC_NPROCESSORS_ONLN );
+    CommonSettings.num_cores = (int) sysconf( _SC_NPROCESSORS_ONLN );
 	LOGI("%i cores detected", CommonSettings.num_cores);
-	CommonSettings.advanced_timing = false;
 	CommonSettings.cheatsDisable = false;
 	CommonSettings.autodetectBackupMethod = 0;
 	video.rotation =  0;
@@ -205,13 +203,13 @@ void EMU_loadSettings()
 	CommonSettings.showGpu.main = 1;
 	CommonSettings.showGpu.sub = 1;
 	CommonSettings.spu_advanced = false;
-	CommonSettings.advanced_timing = false;
+	CommonSettings.advanced_timing = true;
 	CommonSettings.GFX3D_Zelda_Shadow_Depth_Hack = 1;
 	CommonSettings.wifi.mode = 0;
 	CommonSettings.wifi.infraBridgeAdapter = 0;
     autoframeskipenab = true;
 	frameskiprate = 2;
-    CommonSettings.CpuMode = 1;
+//    CommonSettings.CpuMode = 1;
 	CommonSettings.spuInterpolationMode = SPUInterpolation_Cosine; //Will
 	CommonSettings.GFX3D_HighResolutionInterpolateColor = 1;
 	CommonSettings.GFX3D_EdgeMark = 0;
@@ -300,6 +298,14 @@ void EMU_setSynchMode(bool enabled)
 
 void EMU_enableSound(bool enabled)
 {
+/*
+ SPU seems to need to be kickstarted. If left disabled when initializing the ROM,
+ then we can't expect to magically enable it partway through. To solve this, we
+ just let it run for a cycle if we disable sound.
+ 
+ More information see iNDS-Team/iNDS#35
+ */
+    if (!enabled) SPU_Emulate_user(true);
     soundEnabled = enabled;
 }
 
@@ -317,7 +323,15 @@ void EMU_setFrameSkip(int skip)
 
 void EMU_setCPUMode(int cpuMode)
 {
-    CommonSettings.CpuMode = cpuMode;
+//    CommonSettings.CpuMode = cpuMode;
+}
+
+void EMU_setAdvancedBusTiming(bool mode) {
+    CommonSettings.advanced_timing = mode;
+}
+
+void EMU_setDepthComparisonThreshold(int depth) {
+    CommonSettings.GFX3D_Zelda_Shadow_Depth_Hack = depth;
 }
 
 void EMU_runCore()
@@ -438,18 +452,21 @@ void* EMU_getVideoBuffer(size_t *outSize)
     return video.finalBuffer();
 }
 
+CACHE_ALIGN  u32 RGbA8_Buffer[256*192*2];
+
+u32 *EMU_RBGA8Buffer()
+{
+    const int size = 192 * 256 * 2;
+    
+    u16* src = (u16*)GPU_screen;
+    for(int i=0;i<size;++i)
+        RGbA8_Buffer[i] = 0xFF000000 | RGB15TO32_NOALPHA(src[i]);
+    return RGbA8_Buffer;
+}
+
 void EMU_copyMasterBuffer()
 {
-	video.srcBuffer = GPU_getDisplayBuffer();
-	
-	//convert pixel format to 32bpp for compositing
-	//why do we do this over and over? well, we are compositing to
-	//filteredbuffer32bpp, and it needs to get refreshed each frame..
-	const int size = video.size();
-	u16* src = (u16*)video.srcBuffer;
-    u32* dest = video.buffer;
-    for(int i=0;i<size;++i)
-        *dest++ = 0xFF000000 | RGB15TO32_NOALPHA(src[i]);
+    video.copyBuffer(GPU_screen);
 }
 
 void EMU_touchScreenTouch(int x, int y)

@@ -1,16 +1,50 @@
 PODS:
-  - ObjectiveDropboxOfficial (3.9.0)
+  - FileMD5Hash (2.0.0)
+  - MHWDirectoryWatcher (0.0.8)
+  - ObjectiveDropboxOfficial (3.10.0)
+  - SCLAlertView-Objective-C (1.1.5)
+  - SDWebImage (4.4.1):
+    - SDWebImage/Core (= 4.4.1)
+  - SDWebImage/Core (4.4.1)
+  - UnrarKit (2.8.1):
+    - UnrarKit/unrar-lib (= 2.8.1)
+  - UnrarKit/unrar-lib (2.8.1)
 
 DEPENDENCIES:
-  - ObjectiveDropboxOfficial
+  - FileMD5Hash (~> 2.0)
+  - MHWDirectoryWatcher (from `https://github.com/hwaxxer/MHWDirectoryWatcher.git`, tag `0.0.8`)
+  - ObjectiveDropboxOfficial (~> 3.10.0)
+  - SCLAlertView-Objective-C (~> 1.1)
+  - SDWebImage (~> 4.0)
+  - UnrarKit (~> 2.6)
 
 SPEC REPOS:
   https://github.com/CocoaPods/Specs.git:
+    - FileMD5Hash
+    - SCLAlertView-Objective-C
+    - SDWebImage
+    - UnrarKit
+  trunk:
     - ObjectiveDropboxOfficial
 
+EXTERNAL SOURCES:
+  MHWDirectoryWatcher:
+    :git: https://github.com/hwaxxer/MHWDirectoryWatcher.git
+    :tag: 0.0.8
+
+CHECKOUT OPTIONS:
+  MHWDirectoryWatcher:
+    :git: https://github.com/hwaxxer/MHWDirectoryWatcher.git
+    :tag: 0.0.8
+
 SPEC CHECKSUMS:
-  ObjectiveDropboxOfficial: 64a809a85744ce58866bf98066f98be5d4c0582e
+  FileMD5Hash: 3ed69cc19a21ff4d30ae8833fc104275ad2c7de0
+  MHWDirectoryWatcher: 681d399d4bcc84116461b0a2fc1146b01783016b
+  ObjectiveDropboxOfficial: 19a4913d4d52fba035d41f40da71df0d6b303327
+  SCLAlertView-Objective-C: 69c8932c332ce61ee9e693379451e2c0b09fb307
+  SDWebImage: 47e9b5b925cbce75946c23f0c42dd19464189af4
+  UnrarKit: 167602bda6542e575c4cdc068509d6b787f84468
 
-PODFILE CHECKSUM: 67173865a1d88d76b6c6d8411e0a24f29aef18eb
+PODFILE CHECKSUM: 010e4a2ea2f81f47d3a977a5cd4460be257423d0
 
-COCOAPODS: 1.5.0
+COCOAPODS: 1.8.4

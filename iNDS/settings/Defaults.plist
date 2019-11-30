@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>hapticForVibration</key>
+	<false/>
 	<key>videoFilter</key>
 	<integer>5</integer>
 	<key>enableMic</key>
@@ -15,6 +17,8 @@
 	<key>frameSkip</key>
 	<integer>-1</integer>
 	<key>disableSound</key>
+	<false/>
+	<key>allowExternalAudio</key>
 	<false/>
 	<key>controlOpacity</key>
 	<real>0.5</real>
@@ -38,7 +42,13 @@
 	<string>ks1ulr086qvvy1k</string>
 	<key>dbAppSecret</key>
 	<string>cd15jte9slez9wu</string>
+	<key>vibrationStr</key>
+	<integer>0</integer>
 	<key>disableTouchScreen</key>
 	<false/>
+	<key>adv_timing</key>
+	<false/>
+	<key>depth</key>
+	<integer>0</integer>
 </dict>
 </plist>

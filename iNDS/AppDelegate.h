@@ -37,8 +37,11 @@
 - (void)startGame:(iNDSGame *)game withSavedState:(NSInteger)savedState;
 - (void)startBackgroundProcesses;
 - (void)authDropbox;
+- (void)downloadDB:(void(^)(int))handler;
 
 - (BOOL)isSystemApplication;
+
+extern NSString * const iNDSUserRequestedToPlayROMNotification;
 
 @end
 

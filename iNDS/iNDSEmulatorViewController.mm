@@ -17,7 +17,6 @@
 
 #import "UIDevice+Private.h"
 #import "RBVolumeButtons.h"
-#import "SharkfoodMuteSwitchDetector.h"
 
 #import <GLKit/GLKit.h>
 #import <OpenGLES/ES2/gl.h>
@@ -135,10 +134,11 @@ enum VideoFilter : NSUInteger {
     UINavigationController * settingsNav;
     
     RBVolumeButtons *volumeStealer;
-    SharkfoodMuteSwitchDetector *muteDetector;
     
     CADisplayLink *coreLink;
     dispatch_semaphore_t displaySemaphore;
+    
+    UIFeedbackGenerator *vibration;
 }
 
 
@@ -200,7 +200,8 @@ enum VideoFilter : NSUInteger {
     [notificationCenter addObserver:self selector:@selector(screenChanged:) name:UIScreenDidDisconnectNotification object:nil];
     [notificationCenter addObserver:self selector:@selector(controllerActivated:) name:GCControllerDidConnectNotification object:nil];
     [notificationCenter addObserver:self selector:@selector(controllerDeactivated:) name:GCControllerDidDisconnectNotification object:nil];
-    
+    [notificationCenter addObserver:self selector:@selector(userRequestedToPlayROM:) name:iNDSUserRequestedToPlayROMNotification object:nil];
+
     if ([[GCController controllers] count] > 0) {
         [self controllerActivated:nil];
     }
@@ -231,13 +232,6 @@ enum VideoFilter : NSUInteger {
         });
     };
     
-    muteDetector = [SharkfoodMuteSwitchDetector shared];
-    __weak iNDSEmulatorViewController* weakself = self;
-    muteDetector.silentNotify = ^(BOOL silent){
-        [weakself defaultsChanged:nil];
-    };
-    
-    
     
     [self defaultsChanged:nil];
     
@@ -266,6 +260,9 @@ enum VideoFilter : NSUInteger {
     disableTouchScreen = [[NSUserDefaults standardUserDefaults] boolForKey:@"disableTouchScreen"];
     
     coreLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(emulatorLoop)];
+    if (@available(iOS 10, *)) {
+        [coreLink setPreferredFramesPerSecond:60];
+    }    
     coreLink.paused = YES;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         [coreLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
@@ -276,14 +273,12 @@ enum VideoFilter : NSUInteger {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    [UIApplication sharedApplication].statusBarHidden = YES;
     [[UIApplication sharedApplication] setStatusBarStyle:UIStatusBarStyleLightContent];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [self pauseEmulation];
-    [UIApplication sharedApplication].statusBarHidden = NO;
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -309,6 +304,33 @@ enum VideoFilter : NSUInteger {
     });
 }
 
+- (void) userRequestedToPlayROM:(NSNotification *) notification {
+    NSLog(@"Notification");
+    iNDSGame *game = notification.object;
+    
+    if ([self.game isEqual:game]) {
+        return;
+    }
+    
+    if (self.game == nil) {
+        [AppDelegate.sharedInstance startGame:game withSavedState:-1];
+    }
+    
+    [self pauseEmulation];
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Game Currently Running" message:[NSString stringWithFormat:@"Would you like to end %@ and start %@? All unsaved data will be lost.", self.game.title, game.title] preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction * action) {
+        [self resumeEmulation];
+    }];
+    UIAlertAction *continueAction = [UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
+        [self changeGame:game];
+    }];
+    
+    [alert addAction:cancelAction];
+    [alert addAction:continueAction];
+    
+}
+
 - (void)didReceiveMemoryWarning
 {
     [super didReceiveMemoryWarning];
@@ -317,7 +339,7 @@ enum VideoFilter : NSUInteger {
 
 - (BOOL)prefersStatusBarHidden
 {
-    return YES;
+    return !settingsShown;
 }
 
 - (void)loadProfile:(iNDSEmulationProfile *)profile
@@ -348,17 +370,24 @@ enum VideoFilter : NSUInteger {
         EMU_setSynchMode([defaults boolForKey:@"synchSound"]);
         
         // (Mute on && don't ignore it) or user has sound disabled
-        BOOL muteSound = (muteDetector.isMute && ![defaults boolForKey:@"ignoreMute"]) || [defaults boolForKey:@"disableSound"];
+        BOOL muteSound = [defaults boolForKey:@"disableSound"];
         EMU_enableSound(!muteSound);
-        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord error:nil];
+        AVAudioSessionCategoryOptions opts = AVAudioSessionCategoryOptionDefaultToSpeaker | AVAudioSessionCategoryOptionAllowBluetoothA2DP;
+        if([defaults boolForKey:@"allowExternalAudio"]){
+            opts |= AVAudioSessionCategoryOptionMixWithOthers;
+        }
+        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:opts error:nil];
         
         // Filter
         int filterTranslate[] = {NONE, EPX, SUPEREAGLE, _2XSAI, SUPER2XSAI, BRZ2x, LQ2X, BRZ3x, HQ2X, HQ4X, BRZ4x, BRZ5x};
         NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoFilter"];
         EMU_setFilter(filterTranslate[filter]);
     }
-    self.directionalControl.style = [defaults integerForKey:@"controlPadStyle"];
-    self.fpsLabel.hidden = ![defaults integerForKey:@"showFPS"];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.directionalControl.style = [defaults integerForKey:@"controlPadStyle"];
+        self.fpsLabel.hidden = ![defaults integerForKey:@"showFPS"];
+    });
+    
     
     // For some reason both of these disable the mic
     if ([defaults integerForKey:@"volumeBumper"] && !settingsShown) {
@@ -367,7 +396,16 @@ enum VideoFilter : NSUInteger {
         [volumeStealer stopStealingVolumeButtonEvents];
     }
     
-    [self.view setNeedsLayout];
+    if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 1) {
+//        [self vibrateSoft];
+        vibration = [[UISelectionFeedbackGenerator alloc] init];
+    } else if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 2) {
+        vibration = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    }
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.view setNeedsLayout];
+    });
 }
 
 
@@ -448,6 +486,8 @@ enum VideoFilter : NSUInteger {
     EMU_init([iNDSGame preferredLanguage]);
     //2 for JIT
     EMU_setCPUMode((int)[[NSUserDefaults standardUserDefaults] integerForKey:@"cpuMode"] + 1);
+    EMU_setAdvancedBusTiming([[NSUserDefaults standardUserDefaults] boolForKey:@"adv_timing"]);
+    EMU_setDepthComparisonThreshold([[NSUserDefaults standardUserDefaults] boolForKey:@"depth"]);
     EMU_loadRom([self.game.path fileSystemRepresentation]);
     EMU_change3D(1);
         
@@ -671,15 +711,14 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
     
     if (!EMU_frameSkip(false)) {
         [self calculateFPS:1];
+        EMU_copyMasterBuffer();
         if (filter == -1) {
-            EMU_copyMasterBuffer();
             [self updateDisplay];
         } else {
             // Run the filter on a seperate thread to increase performance
             // Core will always be one frame ahead
             dispatch_semaphore_wait(displaySemaphore, DISPATCH_TIME_FOREVER);
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-                EMU_copyMasterBuffer();
                 //This will automatically throttle fps to 60
                 [self updateDisplay];
                 dispatch_semaphore_signal(displaySemaphore);
@@ -775,27 +814,22 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
 
 - (IBAction)toggleSettings:(id)sender
 {
-    UIView * statusBar = [self statuBarView];
     if (!settingsShown) { //About to show settings
         [self setLidClosed:YES];
         // Give time for lid close
         //dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [volumeStealer performSelector:@selector(stopStealingVolumeButtonEvents) withObject:nil afterDelay:0.1]; //Non blocking
-            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"fullScreenSettings"]) {
-                [[UIApplication sharedApplication] setStatusBarHidden:NO];
-                statusBar.alpha = 0;
-            }
             [self.settingsContainer setHidden:NO];
             [self pauseEmulation];
             [UIView animateWithDuration:0.3 animations:^{
                 self.darkenView.hidden = NO;
                 self.darkenView.alpha = 0.6;
                 self.settingsContainer.alpha = 1;
+                settingsShown = YES;
                 if ([[NSUserDefaults standardUserDefaults] boolForKey:@"fullScreenSettings"]) {
-                    statusBar.alpha = 1;
+                    [self setNeedsStatusBarAppearanceUpdate];
                 }
             } completion:^(BOOL finished) {
-                settingsShown = YES;
                 if (!inEditingMode)
                     [CHBgDropboxSync start];
             }];
@@ -809,10 +843,11 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
         [UIView animateWithDuration:0.3 animations:^{
             self.darkenView.alpha = 0.0;
             self.settingsContainer.alpha = 0;
-            statusBar.alpha = 0;
-        } completion:^(BOOL finished) {
-            [[UIApplication sharedApplication] setStatusBarHidden:YES];
             settingsShown = NO;
+            if ([[NSUserDefaults standardUserDefaults] boolForKey:@"fullScreenSettings"]) {
+                [self setNeedsStatusBarAppearanceUpdate];
+            }
+        } completion:^(BOOL finished) {
             self.settingsContainer.hidden = YES;
             [self resumeEmulation];
             self.darkenView.hidden = YES;
@@ -928,6 +963,15 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
 
 - (void)controllerPressedDPad:(iNDSDirectionalControlDirection) state
 {
+    if (state != _previousDirection && state != 0)
+    {
+        if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 1)
+        {
+            [self vibrateSoft];
+        } else if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 2) {
+            [self vibrateStrong];
+        }
+    }
     EMU_setDPad(state & iNDSDirectionalControlDirectionUp, state & iNDSDirectionalControlDirectionDown, state & iNDSDirectionalControlDirectionLeft, state & iNDSDirectionalControlDirectionRight);
     
     _previousDirection = state;
@@ -937,9 +981,11 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
 {
     if (state != _previousButtons && state != 0)
     {
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"vibrate"])
+        if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 1)
         {
-            [self vibrate];
+            [self vibrateSoft];
+        } else if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 2) {
+            [self vibrateStrong];
         }
     }
     
@@ -955,9 +1001,11 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
 
 - (void) controllerOnButtonDown:(BUTTON_ID) button
 {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"vibrate"])
+    if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 1)
     {
-        [self vibrate];
+        [self vibrateSoft];
+    } else if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 2) {
+        [self vibrateStrong];
     }
     EMU_buttonDown(button);
 }
@@ -983,9 +1031,11 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
 
 - (IBAction)onButtonDown:(UIControl*)sender
 {
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"vibrate"])
+    if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 1)
     {
-        [self vibrate];
+        [self vibrateSoft];
+    } else if ([[NSUserDefaults standardUserDefaults] integerForKey:@"vibrationStr"] == 2) {
+        [self vibrateStrong];
     }
     EMU_buttonDown((BUTTON_ID)sender.tag);
 }
@@ -993,17 +1043,37 @@ NSInteger filter = [[NSUserDefaults standardUserDefaults] integerForKey:@"videoF
 FOUNDATION_EXTERN void AudioServicesStopSystemSound(int);
 FOUNDATION_EXTERN void AudioServicesPlaySystemSoundWithVibration(unsigned long, objc_object*, NSDictionary*);
 
-- (void)vibrate
+- (void)vibrateSoft
 {
+    //NSLog(@"Soft.");
     if (settingsShown || inEditingMode) return;
     // If force touch is avaliable we can assume taptic vibration is too
-    if ([[self.view traitCollection] respondsToSelector:@selector(forceTouchCapability)] && [[self.view traitCollection] forceTouchCapability] == UIForceTouchCapabilityAvailable) {
-        [[[UIDevice currentDevice] tapticEngine] actuateFeedback:UITapticEngineFeedbackPeek];
+    if ([[self.view traitCollection] respondsToSelector:@selector(forceTouchCapability)] && ([[self.view traitCollection] forceTouchCapability] == UIForceTouchCapabilityAvailable) && [[NSUserDefaults standardUserDefaults] boolForKey:@"hapticForVibration"]) {
+        [(UISelectionFeedbackGenerator*) vibration selectionChanged];
     } else {
         AudioServicesStopSystemSound(kSystemSoundID_Vibrate);
         
         NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
         NSArray *pattern = @[@YES, @20, @NO, @1];
+        
+        dictionary[@"VibePattern"] = pattern;
+        dictionary[@"Intensity"] = @1;
+        
+        AudioServicesPlaySystemSoundWithVibration(kSystemSoundID_Vibrate, nil, dictionary);
+    }
+}
+
+- (void)vibrateStrong
+{
+    //NSLog(@"Hard");
+    if (settingsShown || inEditingMode) return;// If force touch is avaliable we can assume taptic vibration is too
+    if ([[self.view traitCollection] respondsToSelector:@selector(forceTouchCapability)] && ([[self.view traitCollection] forceTouchCapability] == UIForceTouchCapabilityAvailable) && [[NSUserDefaults standardUserDefaults] boolForKey:@"hapticForVibration"]) {
+        [(UIImpactFeedbackGenerator*) vibration impactOccurred];
+    } else {
+        AudioServicesStopSystemSound(kSystemSoundID_Vibrate);
+        
+        NSMutableDictionary *dictionary = [NSMutableDictionary dictionary];
+        NSArray *pattern = @[@NO, @0, @YES, @30];
         
         dictionary[@"VibePattern"] = pattern;
         dictionary[@"Intensity"] = @1;
@@ -1104,7 +1174,7 @@ FOUNDATION_EXTERN void AudioServicesPlaySystemSoundWithVibration(unsigned long, 
                                                                       @"buttonUp"  : ^{[self controllerPressedABXY:0];}},
 
                               ICADE_BTN_NUMBER(iCadeButtonE):       @{@"buttonDown": ^{[self controllerOnButtonDown:BUTTON_R];},
-                                                                      @"buttonUp"  : ^{[self controllerOnButtonUp:BUTTON_START];}},
+                                                                      @"buttonUp"  : ^{[self controllerOnButtonUp:BUTTON_R];}},
 
                               ICADE_BTN_NUMBER(iCadeButtonF):       @{@"buttonDown": ^{[self controllerOnButtonDown:BUTTON_L];},
                                                                       @"buttonUp"  : ^{[self controllerOnButtonUp:BUTTON_L];}},

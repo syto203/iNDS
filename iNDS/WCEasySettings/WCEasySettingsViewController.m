@@ -20,8 +20,10 @@
     [self.tableView registerClass:[WCEasySettingsSegmentCell class] forCellReuseIdentifier:@"Segment"];
     [self.tableView registerClass:[WCEasySettingsOptionCell class] forCellReuseIdentifier:@"Option"];
     [self.tableView registerClass:[WCEasySettingsSliderCell class] forCellReuseIdentifier:@"Slider"];
+    [self.tableView registerClass:[WCEasySettingsSlider2Cell class] forCellReuseIdentifier:@"Slider2"];
     [self.tableView registerClass:[WCEasySettingsUrlCell class] forCellReuseIdentifier:@"Url"];
     [self.tableView registerClass:[WCEasySettingsCustomCell class] forCellReuseIdentifier:@"Custom"];
+    [self.tableView registerClass:[WCEasySettingsButtonCell class] forCellReuseIdentifier:@"Reset"];
     if([self.tableView respondsToSelector:@selector(setCellLayoutMarginsFollowReadableWidth:)]) {
         self.tableView.cellLayoutMarginsFollowReadableWidth = NO;
     }
@@ -29,6 +31,7 @@
 
 - (void)viewWillAppear:(BOOL)animated
 {
+    [super viewWillAppear:animated];
     [self.tableView reloadData];
     NSLog(@"%@", self.navigationController.viewControllers);
     if (self.navigationController.viewControllers.count == 1) { // We are the main view so add an exit
@@ -91,7 +94,7 @@
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath
 {
     WCEasySettingsItem *item = [self itemForIndexPath:indexPath];
-    if (item.type == WCEasySettingsTypeSegment || item.type == WCEasySettingsTypeSlider) {
+    if (item.type == WCEasySettingsTypeSegment || item.type == WCEasySettingsTypeSlider || item.type == WCEasySettingsTypeSlider2) {
         return 74;
     }
     return 44;

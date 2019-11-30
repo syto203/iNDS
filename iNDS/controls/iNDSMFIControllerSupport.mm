@@ -1,5 +1,4 @@
 #import "iNDSMFIControllerSupport.h"
-#import <GameController/GameController.h>
 
 #include "emu.h"
 
@@ -82,8 +81,17 @@
         };
     }
     
+    _controller.controllerPausedHandler = ^(GCController * _Nonnull controller) {
+        EMU_buttonDown(BUTTON_START);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC * 0.18), dispatch_get_main_queue(), ^(void){
+            EMU_buttonUp(BUTTON_START);
+        });
+    };
+    
     // Make sure the screen doesn't turn off on us while we're playing
-    [[UIApplication sharedApplication] setIdleTimerDisabled:YES];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[UIApplication sharedApplication] setIdleTimerDisabled:YES];
+    });
 }
 
 -(void) onControllerDisconnected:(NSNotification *)notification {
@@ -122,7 +130,9 @@
     _controllerElementToButtonIdMapping = nil;
     
     // Allow the screen to turn off again.
-    [[UIApplication sharedApplication] setIdleTimerDisabled:NO];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[UIApplication sharedApplication] setIdleTimerDisabled:NO];
+    });
 }
 
 @end

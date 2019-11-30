@@ -7,6 +7,9 @@
 //  http://problemkaputt.de/gbatek.htm
 
 #import "iNDSGame.h"
+#import <FileMD5Hash/FileHash.h>
+#import "iNDSDBManager.h"
+#import "AppDelegate.h"
 
 NSString * const iNDSGameSaveStatesChangedNotification = @"iNDSGameSaveStatesChangedNotification";
 
@@ -17,6 +20,8 @@ NSString * const iNDSGameSaveStatesChangedNotification = @"iNDSGameSaveStatesCha
     NSData      *iconTitleData;
     NSString    *title;
     UIImage     *icon;
+    NSString    *md5;
+    NSString    *imageURL;
 }
 
 + (NSArray*)gamesAtPath:(NSString*)gamesPath saveStateDirectoryPath:(NSString*)saveStatePath
@@ -36,6 +41,10 @@ NSString * const iNDSGameSaveStatesChangedNotification = @"iNDSGameSaveStatesCha
 + (iNDSGame*)gameWithPath:(NSString*)path saveStateDirectoryPath:(NSString*)saveStatePath
 {
     return [[iNDSGame alloc] initWithPath:path saveStateDirectoryPath:saveStatePath];
+}
+
++ (iNDSGame*)gameWithName:(NSString *)name {
+    return [[iNDSGame alloc] initWithPath:[[AppDelegate.sharedInstance.documentsPath stringByAppendingPathComponent:name] stringByAppendingPathExtension:@"nds"] saveStateDirectoryPath:AppDelegate.sharedInstance.batteryDir];
 }
 
 - (iNDSGame*)initWithPath:(NSString*)path saveStateDirectoryPath:(NSString*)saveStatePath
@@ -92,9 +101,23 @@ NSString * const iNDSGameSaveStatesChangedNotification = @"iNDSGameSaveStatesCha
 {
     return self.path.lastPathComponent.stringByDeletingPathExtension;
 }
+
 - (NSString*)rawTitle
 {
     return rawTitle;
+}
+
+- (NSString*)origTitle
+{
+    uint16_t version = OSReadLittleInt16(iconTitleData.bytes, 0x000);
+    
+    // find preferred language
+    uint32_t titleOffset = 0x240 + 0x100 * [iNDSGame preferredLanguage];
+    // version 1 doesn't have chinese, or chinese title is invalid, use english
+    if (titleOffset == 0x840 && (version < 2 || ((const Byte *)[iconTitleData bytes])[titleOffset] == '\0')) titleOffset = 0x340;
+    
+    NSData *titleData = [iconTitleData subdataWithRange:NSMakeRange(titleOffset, 0x100)];
+    return [[NSString alloc] initWithData:titleData encoding:NSUTF16LittleEndianStringEncoding];
 }
 
 + (int)preferredLanguage
@@ -107,19 +130,34 @@ NSString * const iNDSGameSaveStatesChangedNotification = @"iNDSGameSaveStatesCha
     return (int)pos;
 }
 
++ (NSDictionary *)altTitles {
+    return [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"altTitles"];
+}
+
+- (void) setAltTitle:(NSString *)altTitle {
+    NSMutableDictionary *titles = [[[self class] altTitles] mutableCopy];
+    if (!titles) {
+        titles = [[NSMutableDictionary alloc] init];
+    }
+    [titles setValue:altTitle forKey:self.title];
+    [[NSUserDefaults standardUserDefaults] setValue:titles forKey:@"altTitles"];
+    
+//    We set the title to nil to indicate that we need to update the gameTitle
+    title = nil;
+}
+
 - (NSString*)gameTitle
 {
     if (iconTitleData == nil) return nil;
     if (title == nil) {
-        uint16_t version = OSReadLittleInt16(iconTitleData.bytes, 0x000);
+        //        Return custom title if available
+        NSDictionary *titles = [[self class] altTitles];
+        if ([titles objectForKey:self.title] && ![[titles objectForKey:self.title] isEqualToString: @""]) {
+            title = [titles objectForKey:self.title];
+            return title;
+        }
         
-        // find preferred language
-        uint32_t titleOffset = 0x240 + 0x100 * [iNDSGame preferredLanguage];
-        // version 1 doesn't have chinese, use english
-        if ((titleOffset == 0x840 && version < 2)) titleOffset = 0x340;
-        
-        NSData *titleData = [iconTitleData subdataWithRange:NSMakeRange(titleOffset, 0x100)];
-        title = [[NSString alloc] initWithData:titleData encoding:NSUTF16LittleEndianStringEncoding];
+        title = self.origTitle;
     }
     return title;
 }
@@ -285,6 +323,55 @@ NSString * const iNDSGameSaveStatesChangedNotification = @"iNDSGameSaveStatesCha
     @finally {
         [fh closeFile];
     }
+}
+
+#pragma mark - Cover
+
+- (NSString *) md5 {
+    if (md5 == nil) {
+        md5 = [FileHash md5HashOfFileAtPath:self.path];
+    }
+    return md5;
+}
+
+- (NSString *) imageURL {
+    if (imageURL == nil) {
+        iNDSDBManager *db = [iNDSDBManager sharedInstance];
+        NSString *boop = [NSString stringWithFormat:@"SELECT romID FROM ROMs WHERE UPPER(romHashMD5) = UPPER(\"%@\");", [self md5]];
+        
+        __block int romID = 0;
+        [db query:boop result:^(int resultCode, sqlite3_stmt *statement) {
+            int uhh = sqlite3_step(statement);
+            
+            if (resultCode == SQLITE_OK && uhh == SQLITE_ROW) {
+                romID = sqlite3_column_int(statement, 0);
+            }
+        }];
+
+        boop = [NSString stringWithFormat:@"SELECT releaseCoverFront FROM RELEASES WHERE romID = %i;", romID];
+        [db query:boop result:^(int resultCode, sqlite3_stmt *statement) {
+            if (resultCode == SQLITE_OK && sqlite3_step(statement) == SQLITE_ROW) {
+                const char *output = (const char *) sqlite3_column_text(statement, 0);
+                if (output) {
+                    self->imageURL = [NSString stringWithUTF8String:(const char *)output];
+                } else {
+                    self->imageURL = @"none"; // we avoid using nil here for caching purposes
+                }
+            }
+        }];
+        
+        NSLog(@"IMAGEURL: %@", imageURL);
+    }
+    
+    return imageURL;
+}
+
+- (BOOL) isEqual:(id)object {
+    return [self.path isEqualToString:((iNDSGame *)object).path];
+}
+
+- (NSUInteger) hash {
+    return self.path.hash;
 }
 
 @end

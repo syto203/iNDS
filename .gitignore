@@ -18,3 +18,21 @@ DerivedData
 *.xccheckout
 build/*
 Pods/
+dist/*
+
+# Due to cross-platform restrictions
+Gemfile.lock
+
+# Repo files
+debs/
+Release
+Packages
+Packages.bz2
+Release.gpg
+CydiaIcon.png
+
+# Jekyll
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata

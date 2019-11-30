@@ -7,13 +7,15 @@
 //
 
 #import <UIKit/UIKit.h>
+#import <SDWebImage/SDWebImageManager.h>
 //#import <DropboxSDK/DropboxSDK.h>
 
-@interface iNDSROMTableViewController : UITableViewController <UIAlertViewDelegate>
+@interface iNDSROMTableViewController : UITableViewController <UIAlertViewDelegate, SDWebImageManagerDelegate>
 {
     NSArray *games;
 }
 
 - (void)reloadGames:(id)sender;
+- (void) userRequestedToPlayROM:(NSNotification *) notification;
 
 @end
